@@ -1,1 +1,3 @@
-# gleam-todo-api
+# gtodo
+
+Very much a work in progress, very much.
