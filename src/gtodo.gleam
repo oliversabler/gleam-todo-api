@@ -3,8 +3,10 @@ import gleam/bytes_builder
 import gleam/erlang/process
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
+import gleam/json.{ string, int }
 import gleam/int
 import gleam/iterator
+import gleam/list
 import gleam/result
 import gleam/string
 import mist.{type Connection, type ResponseData}
@@ -19,14 +21,12 @@ import simplifile.{
     verify_is_file,
     write,
 }
-import gtodo/database
+import gtodo/database.{type Item}
 
 const db_name = "todos.sqlite3"
 
 pub fn main() {
     let assert Ok(_) = database.connect(db_name, database.create_schema)
-    use conn <- database.connect(db_name)
-    database.test_db(conn)
 
     let _ = verify_tmp_storage()
 
@@ -37,6 +37,8 @@ pub fn main() {
     let assert Ok(_) =
         fn(req: Request(Connection)) -> Response(ResponseData) {
             case request.path_segments(req) {
+                ["create"] -> create(req)
+                ["read_all"] -> read_all(req)
                 ["clear"] -> clear(req)
                 ["list"] -> list(req)
                 ["new"] -> new(req)
@@ -52,6 +54,49 @@ pub fn main() {
     process.sleep_forever()
 }
 
+fn create(req: Request(Connection)) -> Response(ResponseData) {
+    let body_result = mist.read_body(req, 1024 * 1024 * 10)
+    |> result.map(fn(r) {
+        r.body
+    })
+
+    let body_bytes = result.lazy_unwrap(body_result, fn() { <<0>> })
+    let body_string = result.lazy_unwrap(bit_array.to_string(body_bytes), fn() { "" })
+
+    use conn <- database.connect(db_name)
+    let _ = database.create_item(body_string, conn)
+
+    response.new(200)
+    |> response.set_body(mist.Bytes(bytes_builder.new()))
+    |> response.set_header("content-type", "text/plain")
+}
+
+fn read_all(_req: Request(Connection)) -> Response(ResponseData) {
+    use conn <- database.connect(db_name)
+    let items = database.read_items(conn)
+
+    let items_json = items_to_json(items)
+    |> json.to_string()
+
+    response.new(200)
+    |> response.set_body(mist.Bytes(bytes_builder.from_string(items_json)))
+    |> response.set_header("content-type", "text/plain")
+}
+
+
+fn item_to_json(item: Item) -> json.Json {
+    json.object([
+        #("id", json.int(item.id)),
+        #("content", json.string(item.content)),
+    ])
+}
+
+fn items_to_json(items: List(Item)) -> json.Json {
+    let items_json = list.map(items, fn(x) { item_to_json(x)})
+    json.array(items_json, of: fn(j) { j })
+}
+
+// Annihilate everyhing below this line when we are done banging our heads against the wall
 fn ping(_req: Request(Connection)) -> Response(ResponseData) {
     response.new(200)
     |> response.set_body(mist.Bytes(bytes_builder.from_string("Pong!")))

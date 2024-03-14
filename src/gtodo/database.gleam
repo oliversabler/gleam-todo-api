@@ -1,10 +1,17 @@
 import gleam/dynamic
-import gleam/io
-import gleam/list
+import gleam/int
+import gleam/result
 import sqlight
 
-pub type Todo {
-    Todo(id: Int, item: String)
+pub type Item {
+    Item(id: Int, content: String)
+}
+
+pub type ApiError {
+    BadRequest
+    ContentRequired
+    NotFound
+    SqlightError(sqlight.Error)
 }
 
 pub type Conn = sqlight.Connection
@@ -16,28 +23,111 @@ pub fn connect(name: String, f: fn(sqlight.Connection) -> a) -> a {
 }
 
 pub fn create_schema(db: sqlight.Connection) -> Result(Nil, sqlight.Error) {
-    sqlight.exec("create table todos (id int, item text);", db)
+    sqlight.exec(
+    "create table if not exists items (
+        id integer primary key autoincrement not null,
+        content text
+    );", db)
 }
 
-pub fn test_db(db: sqlight.Connection) {
-    let assert Ok(_) = sqlight.exec("insert into todos (id, item) values (1337, 'Test');", db)
-    let assert Ok(res) = sqlight.query(
-        "select id, item from todos where id = ?",
-        on: db,
-        with: [sqlight.int(1337)],
-        expecting: todo_decoder(),
+pub fn create_item(content: String, db: sqlight.Connection) -> Result(Int, ApiError) {
+    let query = "insert into items (content) values (?) returning id"
+
+    use rows <- result.then(
+        sqlight.query(
+            query,
+            on: db,
+            with: [sqlight.text(content)],
+            expecting: dynamic.element(0, dynamic.int),
+        )
+        |> result.map_error(fn(error) {
+            case error.code, error.message {
+                sqlight.ConstraintCheck, "CHECK constraint failed: empty_content" ->
+                    ContentRequired
+                _, _ -> BadRequest
+            }
+        }),
     )
 
-    res
-    |> list.map(fn(x) { x })
-    |> io.debug
-
-    sqlight.exec("drop table todos;", db)
+    let assert [id] = rows
+    Ok(id)
 }
 
-fn todo_decoder() -> dynamic.Decoder(Todo) {
+pub fn read_item(item_id: String, db: sqlight.Connection) -> Result(Item, ApiError) {
+    let query = "select id, content from items where id = ?"
+
+    let id = result.lazy_unwrap(int.parse(item_id), fn() { 0 })
+
+    let assert Ok(rows) =
+        sqlight.query(
+            query,
+            on: db,
+            with: [sqlight.int(id)],
+            expecting: result_parser(),
+        )
+
+    case rows {
+        [item] -> Ok(item)
+        _ -> Error(NotFound)
+    }
+}
+
+pub fn read_items(db: sqlight.Connection) -> List(Item) {
+    let query = "select id, content from items"
+
+    let assert Ok(rows) =
+        sqlight.query(
+            query,
+            on: db,
+            with: [],
+            expecting: result_parser(),
+        )
+
+    rows
+}
+
+pub fn update_item(
+    item_id: String,
+    content: String,
+    db: sqlight.Connection
+) -> Result(Item, ApiError) {
+    let query = "update items set content = ?1, where id = ?2 returning id, content"
+
+    let id = result.lazy_unwrap(int.parse(item_id), fn() { 0 })
+
+    let assert Ok(rows) =
+        sqlight.query(
+            query,
+            on: db,
+            with: [sqlight.text(content), sqlight.int(id)],
+            expecting: result_parser(),
+        )
+
+    case rows {
+        [item] -> Ok(item)
+        _ -> Error(NotFound)
+    }
+}
+
+pub fn delete_item(item_id: String, db: sqlight.Connection) -> Nil {
+    let query = "delete from items where id = ?"
+
+    let id = result.lazy_unwrap(int.parse(item_id), fn() { 0 })
+
+    let assert Ok(_) =
+        sqlight.query(
+            query,
+            on: db,
+            with: [sqlight.int(id)],
+            expecting: Ok,
+        )
+
+    Nil
+}
+
+fn result_parser() -> dynamic.Decoder(Item) {
     dynamic.decode2(
-        Todo,
+        Item,
         dynamic.element(0, dynamic.int),
         dynamic.element(1, dynamic.string),
     )
