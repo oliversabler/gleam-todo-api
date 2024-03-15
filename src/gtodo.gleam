@@ -112,7 +112,6 @@ fn delete(_req: Request(Connection), item_id: String) -> Response(ResponseData) 
     |> response.set_body(mist.Bytes(bytes_builder.new()))
 }
 
-
 fn item_to_json(item: Item) -> json.Json {
     json.object([
         #("id", json.int(item.id)),
