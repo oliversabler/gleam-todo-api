@@ -91,7 +91,7 @@ pub fn update_item(
     content: String,
     db: sqlight.Connection
 ) -> Result(Item, ApiError) {
-    let query = "update items set content = ?1, where id = ?2 returning id, content"
+    let query = "update items set content = ?1 where id = ?2 returning id, content"
 
     let id = result.lazy_unwrap(int.parse(item_id), fn() { 0 })
 
